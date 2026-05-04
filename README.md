@@ -41,8 +41,9 @@ Built classification models including:
 
 ## Visualizations
 
-![Confusion Matrix](images/confusion_matrix.png)
-![ROC Curve](images/roc_curve.png)
+![Correlation Matrix](images/corr_matrix.png)
+![ROC Curve](images/roc.png)
+![PCA ROC Curve](images/pca_roc.png)
 
 ## Skills Demonstrated
 - Data preprocessing and feature engineering
