@@ -1,0 +1,807 @@
+
+
+```{r}
+library(caret)
+library(glmnet)
+library(dplyr)
+library(MASS)
+library(ggplot2)
+library(tidyverse)
+library(reshape2)
+library(pROC)
+
+# Import the Dataset 
+data <- read.csv("C:/SCHOOL Spring '25/STA4241/Project/Data/alzheimers_prediction_dataset.csv", sep = ',')
+
+data
+```
+
+### Data Cleaning
+```{r}
+levels <- c("Low", "Medium", "High")
+
+l_m_h_factors <- c("Physical.Activity.Level", "Depression.Level", "Air.Pollution.Exposure", "Income.Level", "Social.Engagement.Level", "Stress.Levels")
+for (col in l_m_h_factors) {
+  data[[col]] <- factor(data[[col]], levels = levels)
+}
+
+data$Alcohol.Consumption <- factor(data$Alcohol.Consumption, levels = c("Never", "Occasionally", "Regularly"))
+data$Smoking.Status <- factor(data$Smoking.Status, levels = c("Never", "Former", "Current"))
+data$Dietary.Habits <- factor(data$Dietary.Habits, levels = c("Unhealthy", "Average", "Healthy"))
+
+
+for (col in names(data)) {
+  if (is.character(data[[col]])) {
+    data[[col]] <- factor(data[[col]])
+  }
+}
+
+#Create a new data set with all numeric values
+new_data <- data.frame()
+
+factor_list <- c("Physical.Activity.Level", "Depression.Level", "Air.Pollution.Exposure", "Income.Level", "Social.Engagement.Level", "Stress.Levels",
+                 "Alcohol.Consumption", "Smoking.Status", "Dietary.Habits", "Country", "Gender", "Diabetes", "Hypertension", "Cholesterol.Level",
+                 "Family.History.of.Alzheimer.s", "Sleep.Quality", "Employment.Status", "Marital.Status", "Genetic.Risk.Factor..APOE.ε4.allele.", 
+                 "Urban.vs.Rural.Living", "Alzheimer.s.Diagnosis")
+
+# Convert the specified columns to numeric and combine them into a data frame
+new_data <- as.data.frame(lapply(factor_list, function(col) as.numeric(data[[col]])))
+
+# Optionally, set the column names correctly
+names(new_data) <- factor_list
+
+head(data)
+
+
+```
+
+
+### 2 Exploratory Data Analysis (EDA)
+The description of all the involved variables are given below.
+
+```{r}
+# Extract numeric columns from 'data'
+numeric_data <- data[, sapply(data, is.numeric)]
+
+# Assuming new_data is already defined (even as an empty data frame with the same number of rows)
+new_data <- cbind(new_data, numeric_data)
+
+```
+ Data Preparation/Cleaning
+
+This exercise is to perform data 
+processing/cleaning via the following steps. 
+
+\begin{itemize}
+\item 
+Removing questionable observations and variables 
+(i.e., any possibility of target leakage) 
+that are not suitable as predictors for \verb|clm|. 
+Explain your decisions.
+
+\item 
+Changing \verb|veh_age| and \verb|ageeat| to factor variables.
+Discuss the advantage(s) and disadvantage(s) of the factor 
+conversions in the context of GLMs. 
+Regardless, convert the two variables to factors.
+\end{itemize}
+
+```{r}
+summary(data)
+dim(data)
+```
+## EDA
+
+First, let's analyze the data and remove any variables that are not suitable as predictors for Alzheimer.s.Diagnosis due to target leakage. 
+
+```{r}
+head(data)
+summary(data$Alzheimer.s.Diagnosis)
+sum(is.na(data))
+```
+There doesn't seem to be any variables that directly leak the Alzheimer Diagnosis. However, there are some variables that will potentially cause high collinearity, like Dietary Habits and Diabetes. Let's do some more exploratory data analysis to see if these are correlated.
+
+After viewing the summary of the data, it seems that all of the variables are normal and there are no missing values. It seems as though this dataset was cleaned prior to being uploaded to Kaggle, which makes our job for Data Preparation easy! However, we will still do our due dilligence in finding any potential interaction and/or collinearity.
+
+Before looking at correlation/interaction, though, let's do some univariate data exploration to see whether any of our non-factor variables need to be transformed, and if so, how?
+
+```{r}
+ggplot(data, aes(x = data$Age)) + geom_histogram()
+ggplot(data, aes(x = data$BMI)) + geom_histogram()
+ggplot(data, aes(x = data$Education.Level)) + geom_histogram()
+ggplot(data, aes(x = data$Cognitive.Test.Score)) + geom_histogram()
+
+
+ggplot(data, aes(x = log(data$Age))) + geom_histogram(color="blue")
+ggplot(data, aes(x = log(data$BMI))) + geom_histogram(color="blue")
+ggplot(data, aes(x = log(data$Education.Level))) + geom_histogram(color="blue")
+ggplot(data, aes(x = log(data$Cognitive.Test.Score))) + geom_histogram(color="blue")
+
+
+ggplot(data, aes(x = sqrt(data$Age))) + geom_histogram(color="red")
+ggplot(data, aes(x = sqrt(data$BMI))) + geom_histogram(color="red")
+ggplot(data, aes(x = sqrt(data$Cognitive.Test.Score))) + geom_histogram(color="red")
+
+
+ggplot(data, aes(x = 1/(data$Age))) + geom_histogram(color="yellow")
+ggplot(data, aes(x = 1/(data$BMI))) + geom_histogram(color="yellow")
+ggplot(data, aes(x = 1/(data$Cognitive.Test.Score))) + geom_histogram(color="yellow")
+
+ggplot(data, aes(x = sqrt(1/(data$Age)))) + geom_histogram(color="orange")
+ggplot(data, aes(x = sqrt(1/(data$BMI)))) + geom_histogram(color="orange")
+ggplot(data, aes(x = sqrt(1/(data$Cognitive.Test.Score)))) + geom_histogram(color="orange")
+
+
+ggplot(data, aes(x = log(1/(data$Age)))) + geom_histogram(color="green")
+ggplot(data, aes(x = log(1/(data$BMI)))) + geom_histogram(color="green")
+ggplot(data, aes(x = log(1/(data$Cognitive.Test.Score)))) + geom_histogram(color="green")
+
+```
+
+After looking at many possible transformations, it seems that perhaps it may be worth tranforming the Cognitive.Test.Score to log(1/(data$Cognitive.Test.Score)). Otherwise, it is probably best to leave the others as is since they are not becoming more normal.
+
+Next, let's perform some Bivariate Data Exploration. Let's look at some boxplots comparing our numeric variables to our target variable.
+
+```{r}
+ggplot(data, aes(x=Alzheimer.s.Diagnosis, y=Age)) + geom_boxplot()
+ggplot(data, aes(x=Alzheimer.s.Diagnosis, y=BMI)) + geom_boxplot()
+ggplot(data, aes(x=Alzheimer.s.Diagnosis, y=Education.Level)) + geom_boxplot()
+ggplot(data, aes(x=Alzheimer.s.Diagnosis, y=Cognitive.Test.Score)) + geom_boxplot()
+
+```
+Wow! It looks like Age plays a big factor in Alzheimer's Diagnoses (which we expect).
+
+Looking at the means and medians of each of these:
+
+```{r}
+data %>%
+  group_by_("Alzheimer.s.Diagnosis") %>%
+  summarise(
+    mean = mean(Age),
+    median = median(Age),
+    n = n()
+  )
+data %>%
+  group_by_("Alzheimer.s.Diagnosis") %>%
+  summarise(
+    mean = mean(BMI),
+    median = median(BMI),
+    n = n()
+  )
+data %>%
+  group_by_("Alzheimer.s.Diagnosis") %>%
+  summarise(
+    mean = mean(Education.Level),
+    median = median(Education.Level),
+    n = n()
+  )
+data %>%
+  group_by_("Alzheimer.s.Diagnosis") %>%
+  summarise(
+    mean = mean(Cognitive.Test.Score),
+    median = median(Cognitive.Test.Score),
+    n = n()
+  )
+
+```
+As expected, the means for each are very similar except for Age, which is significantly different.
+
+
+To perform data exploration on the factor variables, let's create bar charts. We can color code them by Alzheimer's Diagnoses.
+```{r}
+
+# Select only categorical variables
+cat.data <- data[, sapply(data, is.factor)]
+
+# Loop through categorical columns
+for (i in colnames(cat.data)) {
+  plot <- ggplot(data, aes(x = .data[[i]], fill = factor(Alzheimer.s.Diagnosis))) + # Select Age as what to compare each to
+    geom_bar(position = "fill") +
+    labs(x = i, y = "percent") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  
+  print(plot)  # Print each plot
+}
+```
+As we can see, the Family History of Alzheimer's and Genetic Risk Factor (APOE 4 allele) are the variables with the strongest correlation to the diagnoses since these are the plots who's proportions of negative diagnosis (in red) to positive (in blue) vary most significantly across the their levels.
+
+Let's look at the mean of Alzheimer's Diagnosis by different levels of predictors to see more. (come back to this)
+
+```{r}
+
+test1 <- data[, sapply(data, is.factor)]
+
+# Convert Alzheimer.s.Diagnosis to numeric
+test1$Alzheimer.s.Diagnosis <- as.numeric(test1$Alzheimer.s.Diagnosis) - 1
+
+# Perform the group_by and summarise operations
+x <- test1 %>%
+  group_by(Country) %>%
+  summarise(mean = mean(Alzheimer.s.Diagnosis, na.rm = TRUE), n = n())
+
+print(x)
+
+```
+
+Country has many different levels. Let's consider what would happen if we combined multiple countries into continents. Or what would happen if we grouped all countries with a mean of >0.48 together.
+
+```{r}
+levels(data$Country)
+
+table(data$Country)
+
+test2 <- data[, sapply(data, is.factor)]
+
+levels(test2$Country)[levels(test2$Country) == "Brazil"] <- "South America"
+levels(test2$Country)[levels(test2$Country) == "Argentina"] <- "South America"
+
+levels(test2$Country)[levels(test2$Country) == "Canada"] <- "North America"
+levels(test2$Country)[levels(test2$Country) == "USA"] <- "North America"
+levels(test2$Country)[levels(test2$Country) == "Mexico"] <- "North America"
+
+levels(test2$Country)[levels(test2$Country) == "China"] <- "Asia"
+levels(test2$Country)[levels(test2$Country) == "India"] <- "Asia"
+levels(test2$Country)[levels(test2$Country) == "Japan"] <- "Asia"
+levels(test2$Country)[levels(test2$Country) == "Saudi Arabia"] <- "Asia"
+levels(test2$Country)[levels(test2$Country) == "South Korea"] <- "Asia"
+
+levels(test2$Country)[levels(test2$Country) == "France"] <- "Europe"
+levels(test2$Country)[levels(test2$Country) == "Germay"] <- "Europe"
+levels(test2$Country)[levels(test2$Country) == "Italy"] <- "Europe"
+levels(test2$Country)[levels(test2$Country) == "Norway"] <- "Europe"
+levels(test2$Country)[levels(test2$Country) == "Sweden"] <- "Europe"
+levels(test2$Country)[levels(test2$Country) == "Russia"] <- "Europe"
+levels(test2$Country)[levels(test2$Country) == "Spain"] <- "Europe"
+levels(test2$Country)[levels(test2$Country) == "UK"] <- "Europe"
+
+
+# Convert Alzheimer.s.Diagnosis to numeric
+test2$Alzheimer.s.Diagnosis <- as.numeric(test1$Alzheimer.s.Diagnosis)
+
+# Perform the group_by and summarise operations
+x <- test2 %>%
+  group_by(Country) %>%
+  summarise(mean = mean(Alzheimer.s.Diagnosis, na.rm = TRUE), n = n())
+
+print(x)
+
+
+test3 <- test1
+
+levels(test3$Country)[levels(test3$Country) == "Russia"] <- "Russia-India-Brazil-Mexico-SouthAfrica"
+levels(test3$Country)[levels(test3$Country) == "India"] <- "Russia-India-Brazil-Mexico-SouthAfrica"
+levels(test3$Country)[levels(test3$Country) == "Brazil"] <- "Russia-India-Brazil-Mexico-SouthAfrica"
+levels(test3$Country)[levels(test3$Country) == "Mexico"] <- "Russia-India-Brazil-Mexico-SouthAfrica"
+levels(test3$Country)[levels(test3$Country) == "South Africa"] <- "Russia-India-Brazil-Mexico-SouthAfrica"
+
+levels(test3$Country)[!levels(test3$Country) == "Russia-India-Brazil-Mexico-SouthAfrica"] <- "Other"
+
+# Perform the group_by and summarise operations
+x <- test3 %>%
+  group_by(Country) %>%
+  summarise(mean = mean(Alzheimer.s.Diagnosis, na.rm = TRUE), n = n())
+
+print(x)
+
+```
+
+Let's try and see if there is any multicollinearity that exists in the data.
+First, let's try to look at the correlation matrix for only the numerical data.
+
+```{r}
+cor.matrix.numerical <- cor(data[, c(2, 4, 5, 13)])
+
+round(cor.matrix.numerical, digits = 4)
+
+```
+There doesn't seem to be any meaningful correlation between these variables.
+
+
+Now, let's look at the correlation between all of the data.
+
+```{r}
+cor.matrix.all <- cor(new_data)
+round(cor.matrix.all, digits = 2)
+melted.cor.matrix <- melt(round(cor.matrix.all, digits = 4))
+ggplot(data = melted.cor.matrix, aes(x=Var1, y=Var2, fill=value)) + geom_raster()
+
+```
+There doesn't seem to be much correlation, which is good! 
+
+Notice that Alzheimer.s.Diagnosis is correlated with some variables (which is good, since this will be our target variable). All other correlation is negligable.
+
+
+```{r}
+test4 <- data
+
+levels(test4$Country)[levels(test4$Country) == "Russia"] <- "Russia-India-Brazil-Mexico-SouthAfrica"
+levels(test4$Country)[levels(test4$Country) == "India"] <- "Russia-India-Brazil-Mexico-SouthAfrica"
+levels(test4$Country)[levels(test4$Country) == "Brazil"] <- "Russia-India-Brazil-Mexico-SouthAfrica"
+levels(test4$Country)[levels(test4$Country) == "Mexico"] <- "Russia-India-Brazil-Mexico-SouthAfrica"
+levels(test4$Country)[levels(test4$Country) == "South Africa"] <- "Russia-India-Brazil-Mexico-SouthAfrica"
+
+levels(test4$Country)[!levels(test4$Country) == "Russia-India-Brazil-Mexico-SouthAfrica"] <- "Other"
+
+# Loop through categorical columns
+for (i in colnames(test4)) {
+  plot <- ggplot(test4, aes(x = .data[[i]], fill = factor(Age))) + # Select Age as what to compare each to
+    geom_bar(position = "fill") +
+    labs(x = i, y = "percent") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  
+  print(plot)  # Print each plot
+  
+  plot <- ggplot(data, aes(x = .data[["Country"]], fill = factor(Genetic.Risk.Factor..APOE.ε4.allele.))) +
+  geom_bar(position = "fill") +
+  labs(x = "Country", y = "percent") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  
+  print(plot) 
+  
+  plot <- ggplot(data, aes(x = .data[["Country"]], fill = factor(Age))) + # Select Age as what to compare each to
+  geom_bar(position = "fill") +
+  labs(x = "Country", y = "percent") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  
+  print(plot)
+}
+
+
+# Loop through categorical columns
+for (i in colnames(test4)) {
+  plot <- ggplot(test4, aes(x = .data[[i]], fill = factor(Genetic.Risk.Factor..APOE.ε4.allele.))) +
+    geom_bar(position = "fill") +
+    labs(x = i, y = "percent") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  
+  print(plot)  # Print each plot
+}
+
+
+
+data <- test4
+```
+By looking at the plots, it seems as though country may be potentially correlated with a genetic risk factor and/or Age (prior to combining). Therefore, 
+
+Let's now revisit the question of whether or not Diabetes and Diet interact. Let's generate the bar chart for Diabetes filled by the target, Alzheimer's Diagnosis, and faceted by Diet.
+```{r}
+# Ensure 'Alzheimer.s.Diagnosis' and 'Diabetes' are factors
+data$Alzheimer.s.Diagnosis <- as.factor(data$Alzheimer.s.Diagnosis)
+data$Diabetes <- as.factor(data$Diabetes)
+
+# Create the plot
+ggplot(data, aes(x = Diabetes, fill = Alzheimer.s.Diagnosis)) +
+  geom_bar(position = "fill") + 
+  facet_wrap(~ Dietary.Habits) +
+  labs(y = "Proportion", x = "Diabetes") +
+  theme_minimal()
+```
+It seems that the charts are generally even, so these do not interact. How about BMI and Diet? BMI and Physical Activity level?
+
+```{r}
+ggplot(data, aes( x = Alzheimer.s.Diagnosis, y = BMI)) + geom_boxplot() + facet_wrap(~ Dietary.Habits)
+
+ggplot(data, aes( x = Alzheimer.s.Diagnosis, y = BMI)) + geom_boxplot() + facet_wrap(~ Physical.Activity.Level)
+
+```
+We can see that for both Diet and Physical Activity level, the Alzheimer's Diagnosis occurrence doesn't change much. In other words, BMI exerts about the same effect on diagnosis no matter the dietary habits nor physical activity levels.
+
+
+
+
+
+
+### 2 Model Fitting Process 
+
+```{r}
+
+# Convert the specified columns to numeric and combine them into a data frame
+new_data <- as.data.frame(lapply(factor_list, function(col) as.numeric(data[[col]])))
+
+# Optionally, set the column names correctly
+names(new_data) <- factor_list
+
+# Extract numeric columns from 'data'
+numeric_data <- data[, sapply(data, is.numeric)]
+
+# Assuming new_data is already defined (even as an empty data frame with the same number of rows)
+new_data <- cbind(new_data, numeric_data)
+
+#Transform the Alzheimer Diagnosis from 1 and 2 to 0 and 1
+new_data$Alzheimer.s.Diagnosis <- as.numeric(as.character(new_data$Alzheimer.s.Diagnosis)) - 1
+
+head(new_data)
+```
+
+Partition the data so that we can have the train and test set to evaluate the models used 
+```{r}
+set.seed(123)
+
+# Create a stratified partition for a 75/25 split
+train_index <- createDataPartition(data$Alzheimer.s.Diagnosis, p = 0.75, list = FALSE)
+
+# Split the data into training and test sets
+train_data_log <- data[train_index, ]
+test_data_log  <- data[-train_index, ]
+
+train_data_glm <- new_data[train_index, ]
+test_data_glm <- new_data[-train_index, ]
+
+#Transform target column for the logistic data
+train_data_log$Alzheimer.s.Diagnosis <- as.numeric(train_data_log$Alzheimer.s.Diagnosis) - 1
+test_data_log$Alzheimer.s.Diagnosis <- as.numeric(test_data_log$Alzheimer.s.Diagnosis) - 1
+
+head(train_data_log)
+```
+
+###### Conduct the logistic regression 
+```{r}
+factor_levels <- sapply(train_data_log, function(x) if (is.factor(x)) length(unique(x)) else NA)
+
+log_reg <- glm(Alzheimer.s.Diagnosis ~ . , 
+               data = train_data_log, 
+               family = binomial)
+
+log_reg.offset <- glm(Alzheimer.s.Diagnosis ~ . - Age, data = train_data_log, offset = log(Age), family = binomial)
+```
+
+## SPENCER
+###### Conduct Probit regression 
+```{r}
+# Convert Alzheimer from Yes or No to binary numerical
+data$Alzheimer.s.Diagnosis <- as.numeric(data$Alzheimer.s.Diagnosis == "Yes")
+
+probit_reg <- glm(Alzheimer.s.Diagnosis ~ .,
+             data = train_data_log,
+             family = binomial(link = "probit"))
+
+AIC(log_reg)
+AIC(probit_reg)
+```
+## Logit vs Probit
+```{r}
+# logit_probs <- predict(log_reg, newdata = test_data_log, type = "response")
+# 
+# probit_probs <- predict(probit_reg, newdata = test_data_log, type = "response")
+# 
+# roc_logit <- roc(test_data_log$Alzheimer.s.Diagnosis, logit_probs)
+# 
+# roc_probit <- roc(test_data_log$Alzheimer.s.Diagnosis, probit_probs)
+# 
+# plot(roc_logit, col = "blue", main = "ROC: Logit vs Probit")
+# lines(roc_probit, col = "red", lty = 2)
+# legend("bottomright", legend = c("Logit", "Probit"),
+#        col = c("blue", "red"), lty = c(1, 2))
+# auc(roc_logit)
+# auc(roc_probit)
+# 
+# plot(logit_probs, probit_probs, 
+#      xlab = "Logit Predicted Probabilities", 
+#      ylab = "Probit Predicted Probabilities",
+#      main = "Logit vs Probit Predictions",
+#      col = "darkgreen", pch = 16)
+# abline(0, 1, col = "gray", lty = 2)
+
+aic_values <- c(logit = AIC(log_reg), probit = AIC(probit_reg))
+barplot(aic_values,
+        col = c("steelblue", "salmon"),
+        main = "Model Comparison by AIC",
+        ylab = "AIC",
+        ylim = c(min(aic_values) - 2, max(aic_values) + 2))
+text(x = c(0.7, 1.9), y = aic_values + 0.5, 
+     labels = round(aic_values, 2))
+
+
+```
+
+###### Confusion Matrix
+```{r}
+cutoff <- 0.4141762
+
+# Reduced
+pred.train <- predict(probit_reg, type = "response")
+class.train <- ifelse(pred.train > cutoff, 1, 0)
+
+confusionMatrix(factor(class.train), factor(train_data_log$Alzheimer.s.Diagnosis), positive = "1")
+
+pred.test <- predict(probit_reg, newdata = test_data_log, type = "response")
+class.test <- ifelse(pred.test > cutoff, 1, 0)
+
+confusionMatrix(factor(class.test), factor(test_data_log$Alzheimer.s.Diagnosis), positive ="1")
+```
+
+
+# Binarization
+```{r}
+binarizer <- dummyVars(~ Country + Physical.Activity.Level + Smoking.Status + Alcohol.Consumption + Depression.Level + Sleep.Quality + Dietary.Habits + Air.Pollution.Exposure + Employment.Status + Marital.Status + Social.Engagement.Level + Income.Level + Stress.Levels,
+                       data = data,
+                       fullRank = T)
+binarized.vars <- data.frame(predict(binarizer, newdata = data))
+head(binarized.vars)
+
+data.bin <- cbind(data, binarized.vars)
+data.bin$Country <- NULL
+data.bin$Physical.Activity.Level <- NULL
+data.bin$Smoking.Status <- NULL
+data.bin$Alcohol.Consumption <- NULL
+data.bin$Depression.Level <- NULL
+data.bin$Sleep.Quality <- NULL
+data.bin$Dietary.Habits <- NULL
+data.bin$Air.Pollution.Exposure <- NULL
+data.bin$Employment.Status <- NULL
+data.bin$Marital.Status <- NULL
+data.bin$Social.Engagement.Level <- NULL
+data.bin$Income.Level <- NULL
+data.bin$Stress.Levels <- NULL
+
+data.train.bin <- data.bin[train_index, ]
+data.test.bin <- data.bin[-train_index, ]
+
+head(data.train.bin)
+```
+
+
+# Fit the new Probit model with binarization
+```{r}
+probit.full <- glm(Alzheimer.s.Diagnosis ~ .,
+                   data = data.train.bin,
+                   family = binomial("probit"))
+probit.null <- glm(Alzheimer.s.Diagnosis ~ 1,
+                   data = data.train.bin,
+                   family = binomial("probit"))
+probit.reduced <- stepAIC(probit.null,
+                          direction = "forward",
+                          scope = list(upper = probit.full, lower = probit.null),
+                          trace = 0)
+# Extract the AIC history from the stepwise selection
+aic_values <- probit.reduced$history[, "AIC"]
+
+```
+
+# Step-Wise Graphic
+```{r}
+stepwise_AIC <- probit.reduced$aic
+plot(stepwise_AIC, type = "b", col = "blue", 
+     main = "Stepwise Selection: AIC vs. Number of Predictors", 
+     xlab = "Step Number", ylab = "AIC", pch = 16, cex = 1.5)
+```
+
+
+###### Summary of reduced model
+```{r}
+summary(probit.reduced)
+```
+
+
+
+```{r}
+head(data.train.bin)
+```
+
+###### Confusion Matrix for Reduced Model
+```{r}
+cutoff <- 0.4141762
+print("REDUCED TRAIN")
+pred.train.reduced <- predict(probit.reduced, type = "response")
+class.train.reduced <- ifelse(pred.train.reduced > cutoff, 1, 0)
+
+confusionMatrix(factor(class.train.reduced), factor(data.train.bin$Alzheimer.s.Diagnosis), positive = "1")
+
+print("TEST REDUCED")
+pred.test.reduced <- predict(probit.reduced, newdata = data.test.bin, type = "response")
+pred.test.full <- predict(probit.full, newdata = data.test.bin, type = "response")
+pred.test.null <- predict(probit.null, newdata = data.test.bin, type = "response")
+
+class.test.reduced <- ifelse(pred.test.reduced > cutoff, 1, 0)
+
+confusionMatrix(factor(class.test.reduced), factor(data.test.bin$Alzheimer.s.Diagnosis), positive ="1")
+```
+# ROC's
+
+```{r}
+# Create ROC object
+roc_reduced <- roc(data.test.bin$Alzheimer.s.Diagnosis, pred.test.reduced)
+roc_null <- roc(data.test.bin$Alzheimer.s.Diagnosis, pred.test.null)
+roc_full <- roc(data.test.bin$Alzheimer.s.Diagnosis, pred.test.full)
+
+# Plot the ROC curve
+plot(roc_reduced, col = "lightblue", main = "ROC Curve - Reduced Model")
+lines(roc_null, col = "red", lwd = 2, lty = 2)
+lines(roc_full, col = "darkgreen", lwd = 2, lty = 3)
+text(0.7, 0.2, paste("AUC (Full) = ", round(auc(roc_full), 4)), col = "green", cex = 0.9)
+text(0.7, 0.1, paste("AUC (Null) = ", round(auc(roc_null), 4)), col = "red", cex = 0.9)
+text(0.7, 0.05, paste("AUC (Reduced) = ", round(auc(roc_reduced), 4)), col = "blue", cex = 0.9)
+legend("bottomright", legend = c("Reduced Model", "Null Model", "Full Model"),
+       col = c("blue", "red", "green"), lty = c(1, 2, 3), lwd = 2)
+```
+## FRANCISCO
+
+##### Plot the Cross Validation for GLM Elastic Net
+```{r}
+alpha_val <- 0.75
+
+#Assign input values for glmnet compatibility
+x_train <- model.matrix(Alzheimer.s.Diagnosis ~ . - 1, data = train_data_glm)
+x_test <- model.matrix(Alzheimer.s.Diagnosis ~ . - 1, data = test_data_glm)
+
+y_train <- train_data_glm$Alzheimer.s.Diagnosis
+y_test <- test_data_glm$Alzheimer.s.Diagnosis
+
+#Transform to numeric to plot lambda
+y_train_numeric <- as.numeric(as.character(y_train))
+y_test_numeric <- as.numeric(as.character(y_test))
+
+# Perform cross-validation to search for the optimal lambda
+lambda_Search <- cv.glmnet(x_train, y_train_numeric, alpha = alpha_val, nfolds = 10, family = "binomial")
+
+# Plot the cross-validation error versus lambda.
+lambda_Search$lambda.min
+lambda_Search$lambda.1se
+plot(lambda_Search)
+```
+
+##### Fit the elastic net logisitc regression model 
+```{r}
+log_elastic_net <- glmnet(x_train, y_train, family = "binomial", lambda = lambda_Search$lambda.min, alpha = alpha_val)
+print(log_elastic_net)
+coef_opt <- coef(log_elastic_net, s = lambda_Search$lambda.min)
+print(coef_opt)
+```
+
+##### Train and Test Accuracy of the Logistic Elastic Net Model 
+```{r}
+pred_prob_train <- predict(log_elastic_net, newx = x_train, s = lambda_Search$lambda.min, type = "response")
+# Convert predicted probabilities to class labels using a threshold of 0.5:
+pred_class_train <- ifelse(pred_prob_train >= 0.5, 1, 0)
+# Calculate accuracy (percent correct) for the training set:
+accuracy_train <- mean(pred_class_train == y_train)
+cat("Training Accuracy:", accuracy_train, "\n")
+
+pred_prob_test <- predict(log_elastic_net, newx = x_test, s = lambda_Search$lambda.min, type = "response")
+pred_class_test <- ifelse(pred_prob_test >= 0.5, 1, 0)
+# Calculate accuracy for the test set:
+accuracy_test <- mean(pred_class_test == y_test)
+cat("Test Accuracy:", accuracy_test, "\n")
+```
+
+##### Train & Test Accuracy of the Logistic Regression Model 
+```{r}
+# Predict on the training set
+train_pred_prob <- predict(log_reg, newdata = train_data_log, type = "response")
+train_pred_class <- ifelse(train_pred_prob >= 0.5, 1, 0)
+# Extract the actual values (ensure they are numeric 0/1)
+train_actual <- as.numeric(as.character(train_data_log$Alzheimer.s.Diagnosis))
+# Calculate accuracy for the training set
+train_accuracy <- mean(train_pred_class == train_actual)
+cat("Training Accuracy:", train_accuracy, "\n")
+
+# Predict on the test set
+test_pred_prob <- predict(log_reg, newdata = test_data_log, type = "response")
+test_pred_class <- ifelse(test_pred_prob >= 0.5, 1, 0)
+# Extract the actual values from the test set
+test_actual <- as.numeric(as.character(test_data_log$Alzheimer.s.Diagnosis))
+# Calculate accuracy for the test set
+test_accuracy <- mean(test_pred_class == test_actual)
+cat("Test Accuracy:", test_accuracy, "\n")
+
+
+# Predict on the Offset data
+train_pred_prob <- predict(log_reg.offset, newdata = train_data_log, type = "response")
+train_pred_class <- ifelse(train_pred_prob >= 0.5, 1, 0)
+# Extract the actual values (ensure they are numeric 0/1)
+train_actual <- as.numeric(as.character(train_data_log$Alzheimer.s.Diagnosis))
+# Calculate accuracy for the training set
+train_accuracy <- mean(train_pred_class == train_actual)
+cat("Offset Training Accuracy:", train_accuracy, "\n")
+
+# Predict on the test set
+test_pred_prob <- predict(log_reg.offset, newdata = test_data_log, type = "response")
+test_pred_class <- ifelse(test_pred_prob >= 0.5, 1, 0)
+# Extract the actual values from the test set
+test_actual <- as.numeric(as.character(test_data_log$Alzheimer.s.Diagnosis))
+# Calculate accuracy for the test set
+test_accuracy <- mean(test_pred_class == test_actual)
+cat("Offset Test Accuracy:", test_accuracy, "\n")
+
+```
+
+
+## PCA
+
+```{r}
+#Set all non-numeric predictors to NULL
+AlzPCA <- data
+AlzPCA$Country <- NULL
+AlzPCA$Physical.Activity.Level <- NULL
+AlzPCA$Smoking.Status <- NULL
+AlzPCA$Alcohol.Consumption <- NULL
+AlzPCA$Depression.Level <- NULL
+AlzPCA$Sleep.Quality <- NULL
+AlzPCA$Dietary.Habits <- NULL
+AlzPCA$Air.Pollution.Exposure <- NULL
+AlzPCA$Employment.Status <- NULL
+AlzPCA$Marital.Status <- NULL
+AlzPCA$Social.Engagement.Level <- NULL
+AlzPCA$Income.Level <- NULL
+AlzPCA$Stress.Levels <- NULL
+AlzPCA$Gender <- NULL
+AlzPCA$Diabetes <- NULL
+AlzPCA$Hypertension <- NULL
+AlzPCA$Cholesterol.Level <- NULL
+AlzPCA$Family.History.of.Alzheimer.s <- NULL
+AlzPCA$Genetic.Risk.Factor..APOE.ε4.allele. <- NULL
+AlzPCA$Urban.vs.Rural.Living <- NULL
+AlzPCA$Alzheimer.s.Diagnosis <- NULL
+# Run PCA for all numeric except response
+PCA <- prcomp(AlzPCA,
+              center = TRUE,
+              scale. =  TRUE)
+
+# PC loadings
+PCA$rotation
+head(PCA$x, 10)
+```
+
+### Importance of Each PC
+```{r}
+summary(PCA)
+screeplot(PCA, npcs = 4, type = "lines")  
+
+```
+
+### Create PCA Dataset and Partition
+```{r}
+
+# Replace numeric predictors with PCA and add back in the response
+AlzPCAdata <- cbind(AlzPCA, PCA$x, data$Alzheimer.s.Diagnosis)
+AlzPCAdata$Age <- NULL
+AlzPCAdata$Education.Level <- NULL
+AlzPCAdata$BMI <- NULL
+AlzPCAdata$Cognitive.Test.Score <- NULL
+names(AlzPCAdata)[names(AlzPCAdata) == 'data$Alzheimer.s.Diagnosis'] <- 'Alzheimer.s.Diagnosis'
+
+# Partition the new dataset
+set.seed(123)
+partition <- createDataPartition(AlzPCAdata$Alzheimer.s.Diagnosis, p = 0.75,
+                                 list = FALSE)
+PCA.Data.Train <- AlzPCAdata[partition, ]
+PCA.Data.Test <- AlzPCAdata[-partition, ]
+
+# Ensure a good split was made
+mean(PCA.Data.Test$Alzheimer.s.Diagnosis)
+mean(PCA.Data.Train$Alzheimer.s.Diagnosis)
+```
+
+### Create GLM models with PCA
+```{r}
+PCAM3 <- glm(Alzheimer.s.Diagnosis ~ . - PC4, data = PCA.Data.Train, family = binomial)
+summary(PCAM3)
+
+PCAM4 <- glm(Alzheimer.s.Diagnosis ~., data = PCA.Data.Train, family = binomial)
+summary(PCAM4)
+```
+
+### PCA Model Performance w/ Confusion Matrices
+```{r}
+PCA.pred.train <- predict(PCAM4, type = "response")
+PCA.class.train <- ifelse(PCA.pred.train > cutoff, 1, 0)
+
+confusionMatrix(factor(PCA.class.train), factor(PCA.Data.Train$Alzheimer.s.Diagnosis), positive = "1")
+
+PCA.pred.test <- predict(PCAM4, newdata = PCA.Data.Test, type = "response")
+PCA.class.test <- ifelse(PCA.pred.test > cutoff, 1, 0)
+
+confusionMatrix(factor(PCA.class.test), factor(PCA.Data.Test$Alzheimer.s.Diagnosis), positive = "1")
+```
+
+### PCA Model Performance w/ ROC Curve
+```{r}
+# Create ROC object
+roc_PCA <- roc(PCA.Data.Test$Alzheimer.s.Diagnosis, PCA.pred.test)
+auc(roc_PCA)
+
+# Plot the ROC curve
+plot(roc_PCA, col = "blue", main = "ROC Curve - PCAM4")
+text(0.7, 0.2, paste("AUC  = ", round(auc(roc_PCA), 4)), col = "blue", cex = 0.9)
+
+```
