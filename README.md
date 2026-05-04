@@ -4,10 +4,11 @@
 This project builds a predictive model to estimate the likelihood of Alzheimer’s disease using patient data. The goal is to identify key features associated with disease risk and evaluate model performance using classification techniques.
 
 ## Tools Used
-- Python
-- pandas
-- scikit-learn
-- matplotlib / seaborn
+- R
+- Logistic Regression
+- Elastic Net Regression
+- PCA
+- Random Forest
 
 ## Dataset
 The dataset contains patient-level features relevant to Alzheimer’s diagnosis, including demographic and clinical variables.
